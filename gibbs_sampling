@@ -1,0 +1,396 @@
+'''Computational Neuroscience Gibbs Sampling Code by Lyza Marino'''
+import numpy as np
+from matplotlib import pyplot as plt
+
+# Parameters
+prior_1 = 0.04 # Prior expectation of 1
+prior_0 = 0.96 # Prior expectation of 0
+variance = 0.1  # Variance of independent pixel noise
+dt = 0.005  # 5ms
+total_duration = 0.5  # 1 second for part (c)
+num_timebins = int(total_duration / dt)  # 200 time bins
+
+# Step 1: Load + visualize projective fields
+pfs = np.load('wherever your pfs.npy file is')
+fig, axes = plt.subplots(8, 8, figsize=(12, 12))
+axes = axes.flatten() 
+
+for i in range(len(pfs)):
+    # Reshape to 8 x 8 pixel image to show projective field properly
+    pf_image = pfs[i].reshape(8, 8)
+    
+    axes[i].imshow(pf_image, cmap='gray')
+    axes[i].set_yticks([])
+    axes[i].set_xticks([])
+    axes[i].axis('off') 
+
+plt.suptitle("64 Projective Fields of model V1 Neurons")
+plt.tight_layout()
+plt.show()
+
+# Step 2: Gibbs Sampling conditional probability
+def gibbs_conditional_prob(k, I, r, pfs, variance, prior_1, prior_0):
+
+    r_minus_k = r.copy()
+    r_minus_k[k] = 0  
+    
+    # Mean contribution from all other latents
+    mu_minus_k = np.dot(pfs.T, r_minus_k)
+    
+    # POsterior for rk=1
+    residual_1 = I - pfs[k] - mu_minus_k
+    posterior_1 = np.exp(-0.5 / variance * np.sum(residual_1**2)) * prior_1
+    
+    # Posterior for rk=0
+    residual_0 = I - mu_minus_k
+    posterior_0 = np.exp(-0.5 / variance * np.sum(residual_0**2)) * prior_0
+    
+    prob_rk_1 = posterior_1 / (posterior_1 + posterior_0)
+    
+    return prob_rk_1
+
+def run_gibbs_sampling(I, pfs, num_timebins, variance, prior_1, prior_0):
+    """Run Gibbs sampling and return samples"""
+    n_latents = len(pfs)
+    r_samples = np.zeros((num_timebins, n_latents))
+    
+    # Initialize r(1) from prior
+    r_samples[0] = (np.random.rand(n_latents) < prior_1).astype(float)
+    
+    # Gibbs sampling loop
+    for t in range(1, num_timebins):
+        r_samples[t] = r_samples[t-1].copy()
+        
+        for k in range(n_latents):
+            prob_k = gibbs_conditional_prob(k, I, r_samples[t], pfs, variance, prior_1, prior_0)
+            r_samples[t, k] = 1.0 if np.random.rand() < prob_k else 0.0
+    
+    return r_samples
+
+# Setup to compute marginal posterior probability
+np.random.seed(42)
+pixel_dims = pfs.shape[1]
+n_latents = len(pfs)
+
+# Test with pf = 10
+pf_index_1 = 10
+I_input = pfs[pf_index_1]
+
+
+# Run Gibbs sampling
+r_samples = run_gibbs_sampling(I_input, pfs, num_timebins, variance, prior_1, prior_0)
+
+# Compute marginal posteriors
+burn_in = int(0.05 * num_timebins)
+r_samples_after_burnin = r_samples[burn_in:, :]
+marginal_posteriors = np.mean(r_samples_after_burnin, axis=0)
+
+#Plot
+fig = plt.figure(figsize=(14, 10))
+ax1 = plt.subplot(3, 1, 1)
+pf_image = I_input.reshape(8, 8)
+plt.imshow(pf_image, cmap='gray')
+plt.title(f'Input Image: PF #{pf_index_1}')
+ax2 = plt.subplot(3, 1, 2)
+for neuron in range(n_latents):
+    spike_times = np.where(r_samples[:, neuron] == 1)[0]
+    plt.scatter(spike_times * dt * 1000, np.ones_like(spike_times) * neuron, 
+                marker='|', s=100, color='black', linewidths=0.5)
+plt.xlabel('Time (ms)')
+plt.ylabel('Neuron index')
+plt.title(f'Raster Plot: All 64 Neurons')
+plt.xlim([0, total_duration * 1000])
+plt.ylim([-1, n_latents])
+plt.axhline(y=pf_index_1, color='red', linestyle='--', alpha=0.3, linewidth=2)
+
+# Marginal posteriors
+ax3 = plt.subplot(3, 1, 3)
+plt.bar(range(n_latents), marginal_posteriors, color='steelblue', alpha=0.7)
+plt.bar(pf_index_1, marginal_posteriors[pf_index_1], color='red', alpha=0.9, label=f'PF #{pf_index_1}')
+plt.xlabel('Neuron index')
+plt.ylabel('Marginal Posterior Probability')
+plt.title('Marginal Posterior Probability for Each Latent (after burn-in)')
+plt.axhline(y=prior_1, color='purple', linestyle='--', label=f'Prior = {prior_1}')
+plt.legend()
+plt.ylim([0, max(marginal_posteriors) * 1.1])
+
+plt.tight_layout()
+plt.show()
+
+# Reconstruct using marginal posteriors and plot result
+I_reconstructed = np.dot(pfs.T, marginal_posteriors)
+pf_image_reconstructed = I_reconstructed.reshape(8, 8).T
+
+fig, axes = plt.subplots(2, 1)
+axes[0].imshow(pf_image, cmap='gray')
+axes[0].set_title('Input Image')
+axes[1].imshow(pf_image_reconstructed, cmap='gray', label='Reconstructed Image')
+axes[1].set_title('Reconstructed Image from Samples')
+plt.tight_layout()
+plt.show()
+
+
+num_simulations = 10
+max_samples = 200  # 1 second of samples
+sample_points = np.arange(1, max_samples + 1)  # From 1 to 200 samples
+
+mse_curves = np.zeros((num_simulations, len(sample_points)))
+
+for sim in range(num_simulations):
+    
+    # Run Gibbs sampling
+    r_samples_sim = run_gibbs_sampling(I_input, pfs, max_samples, variance, prior_1, prior_0)
+    
+    # Compute MSE for each number of samples
+    for i, n_samples in enumerate(sample_points):
+        # Use samples from burn-in onwards (at least 5% or 5 samples)
+        burn_in_sim = max(1, int(0.05 * n_samples))
+        samples_to_use = r_samples_sim[burn_in_sim:n_samples, :]
+        
+        if len(samples_to_use) > 0:
+            # Compute marginal posteriors from available samples
+            marginal_post = np.mean(samples_to_use, axis=0)
+            # Reconstruct image
+            I_recon = np.dot(pfs.T, marginal_post)
+            # Compute MSE
+            mse_curves[sim, i] = np.mean((I_input - I_recon)**2)
+        else:
+            mse_curves[sim, i] = np.nan
+
+# Plot MSE vs time
+fig, ax = plt.subplots(figsize=(12, 6))
+
+time_ms = sample_points * dt * 1000  # Convert to milliseconds
+
+for sim in range(num_simulations):
+    plt.plot(time_ms, mse_curves[sim, :], alpha=0.6, linewidth=1.5, label=f'Sim {sim+1}')
+
+# Plot mean across simulations
+mean_mse = np.nanmean(mse_curves, axis=0)
+plt.plot(time_ms, mean_mse, color='black', linewidth=3, label='Mean', linestyle='--')
+
+plt.xlabel('Time (ms)')
+plt.ylabel('Mean Squared Error')
+plt.title('MSE between Input and Reconstructed Image vs Number of Samples')
+plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.grid(True, alpha=0.3)
+plt.xlim([5, 500])  # From 5ms to 500ms
+plt.tight_layout()
+plt.show()
+
+# Average of two projective fields
+pf_index_1 = 13
+pf_index_2 = 29
+I_input = (pfs[pf_index_1] + pfs[pf_index_2]) / 2
+
+
+# Gibbs sampling
+r_samples = run_gibbs_sampling(I_input, pfs, num_timebins, variance, prior_1, prior_0)
+
+# Compute marginal posteriors
+burn_in = int(0.05 * num_timebins)
+r_samples_after_burnin = r_samples[burn_in:, :]
+marginal_posteriors = np.mean(r_samples_after_burnin, axis=0)
+
+# Plot Raster
+fig = plt.figure(figsize=(14, 10))
+ax1 = plt.subplot(3, 1, 1)
+pf_image = I_input.reshape(8, 8)
+plt.imshow(pf_image, cmap='gray')
+plt.title(f'Input Image: PF #{pf_index_1} + PF #{pf_index_2}')
+ax2 = plt.subplot(3, 1, 2)
+for neuron in range(n_latents):
+    spike_times = np.where(r_samples[:, neuron] == 1)[0]
+    plt.scatter(spike_times * dt * 1000, np.ones_like(spike_times) * neuron, 
+                marker='|', s=100, color='black', linewidths=0.5)
+plt.xlabel('Time (ms)')
+plt.ylabel('Neuron index')
+plt.title(f'Raster Plot: All 64 Neurons')
+plt.xlim([0, total_duration * 1000])
+plt.ylim([-1, n_latents])
+plt.axhline(y=pf_index_1, color='red', linestyle='--', alpha=0.3, linewidth=2)
+plt.axhline(y=pf_index_2, color='blue', linestyle='--', alpha=0.3, linewidth=2)
+
+# Marginal posteriors
+ax3 = plt.subplot(3, 1, 3)
+plt.bar(range(n_latents), marginal_posteriors, color='steelblue', alpha=0.7)
+plt.bar(pf_index_1, marginal_posteriors[pf_index_1], color='red', alpha=0.9, label=f'PF #{pf_index_1}')
+plt.bar(pf_index_2, marginal_posteriors[pf_index_2], color='blue', alpha=0.9, label=f'PF #{pf_index_2}')
+plt.xlabel('Neuron index')
+plt.ylabel('Marginal Posterior Probability')
+plt.title('Marginal Posterior Probability for Each Latent (after burn-in)')
+plt.axhline(y=prior_1, color='purple', linestyle='--', label=f'Prior = {prior_1}')
+plt.legend()
+plt.ylim([0, max(marginal_posteriors) * 1.1])
+
+plt.tight_layout()
+plt.show()
+
+# Reconstruct using marginal posteriors and plot result
+I_reconstructed = np.dot(pfs.T, marginal_posteriors)
+pf_image_reconstructed = I_reconstructed.reshape(8, 8).T
+fig, axes = plt.subplots(2, 1)
+
+axes[0].imshow(pf_image, cmap='gray')
+axes[0].set_title('Input Image')
+axes[1].imshow(pf_image_reconstructed, cmap='gray', label='Reconstructed Image')
+axes[1].set_title('Reconstructed Image from Samples')
+plt.tight_layout()
+plt.show()
+
+num_simulations = 10
+max_samples = 200  # 1 second
+sample_points = np.arange(1, max_samples + 1)  #from 1 to 200
+
+mse_curves = np.zeros((num_simulations, len(sample_points)))
+
+for sim in range(num_simulations):
+    print(f"Running simulation {sim + 1}/{num_simulations}...")
+    
+    # Gibbs sampling
+    r_samples_sim = run_gibbs_sampling(I_input, pfs, max_samples, variance, prior_1, prior_0)
+    
+    # Compute MSE for each number of samples
+    for i, n_samples in enumerate(sample_points):
+        burn_in_sim = max(1, int(0.05 * n_samples))
+        samples_to_use = r_samples_sim[burn_in_sim:n_samples, :]
+        
+        if len(samples_to_use) > 0:
+            # Compute marginal posteriors from available samples
+            marginal_post = np.mean(samples_to_use, axis=0)
+            # Reconstruct image
+            I_recon = np.dot(pfs.T, marginal_post)
+            # Compute MSE
+            mse_curves[sim, i] = np.mean((I_input - I_recon)**2)
+        else:
+            mse_curves[sim, i] = np.nan
+
+# Plot MSE vs time
+fig, ax = plt.subplots(figsize=(12, 6))
+
+time_ms = sample_points * dt * 1000  # Convert to milliseconds
+
+for sim in range(num_simulations):
+    plt.plot(time_ms, mse_curves[sim, :], alpha=0.6, linewidth=1.5, label=f'Sim {sim+1}')
+
+# Plot mean across simulations
+mean_mse = np.nanmean(mse_curves, axis=0)
+plt.plot(time_ms, mean_mse, color='black', linewidth=3, label='Mean', linestyle='--')
+
+plt.xlabel('Time (ms)')
+plt.ylabel('Mean Squared Error')
+plt.title('MSE between Input and Reconstructed Image vs Number of Samples')
+plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.grid(True, alpha=0.3)
+plt.xlim([5, 1000])  # From 5ms to 1000ms
+plt.tight_layout()
+plt.show()
+
+
+#Set up +-5 degree x and y, discretize so that 1 pixel corresponds to 0.2 deg x 0.2 deg (8 x 8 image)
+X = np.linspace(-0.8, 0.8, 8)
+Y = np.linspace(-0.8, 0.8, 8)
+x, y = np.meshgrid(X, Y)
+
+# Parameters
+c = 0.2  # Contrast
+theta = np.linspace(-np.pi, np.pi, 50)  # 50 orientations
+k_list = [4.0, 2.0, 1.0]  # 3 spatial freqs
+
+gratings = {}
+for k in k_list:
+    gratings[k] = []
+    for i in range(len(theta)):
+        I = c * np.sin(k * (x * np.cos(theta[i]) - y * np.sin(theta[i])))
+        gratings[k].append(I)
+
+# Plot gratings 50 gratings for each spatial freq
+for k in k_list:
+    fig, axes = plt.subplots(5, 10, figsize=(20, 10))
+    fig.suptitle(f'Sinusoidal Gratings - Spatial Frequency k = {k}')
+    
+    for idx in range(50):
+        row = idx // 10
+        col = idx % 10
+        ax = axes[row, col]
+        im = ax.imshow(gratings[k][idx], cmap='gray')
+        ax.axis('off')
+        
+    plt.tight_layout()
+    plt.show()
+
+
+#Neurophysiology experiment parameters
+num_trials = 50
+stim_duration = 0.5  # 500ms
+dt = 0.005  # 5ms
+num_timebins_stim = int(stim_duration / dt)  # 100 time bins per trial
+
+# Store firing rates: [n_neurons, n_spatial_freqs, n_orientations]
+n_neurons = len(pfs)
+n_orientations = len(theta)
+n_spatial_freqs = len(k_list)
+
+firing_rates = np.zeros((n_neurons, n_spatial_freqs, n_orientations))
+
+
+
+# Loop over spatial frequencies
+for k_idx, k in enumerate(k_list):
+    
+    # Loop over orientations
+    for ori_idx in range(n_orientations):        
+        
+        I_grating = gratings[k][ori_idx]
+        np.ndarray.flatten(I_grating)
+        spike_counts = np.zeros((num_trials, n_neurons))
+        
+        for trial in range(num_trials):
+            # Gibbs sampling for this trial
+            r_samples = run_gibbs_sampling(I_grating, pfs, num_timebins_stim, 
+                                          variance, prior_1, prior_0)
+            
+            # Count spikes for each neuron (sum over time)
+            spike_counts[trial, :] = np.sum(r_samples, axis=0)
+        
+        # Compute average firing rate (spikes per second)
+        avg_spike_count = np.mean(spike_counts, axis=0)
+        avg_firing_rate = avg_spike_count / stim_duration  # Convert to Hz
+        
+        # Store results
+        firing_rates[:, k_idx, ori_idx] = avg_firing_rate
+
+# Theta2Degrees
+theta_degrees = np.degrees(theta)
+
+# Plot orientation tuning curves for all neurons
+fig, axes = plt.subplots(8, 8, figsize=(20, 20))
+axes = axes.flatten()
+
+colors = ['blue', 'red', 'green']  # One color for each spatial frequency
+labels = [f'k = {k}' for k in k_list]
+
+for neuron_idx in range(n_neurons):
+    ax = axes[neuron_idx]
+    
+    # Plot tuning curve for each spatial frequency
+    for k_idx, k in enumerate(k_list):
+        ax.plot(theta_degrees, firing_rates[neuron_idx, k_idx, :], 
+               color=colors[k_idx], label=labels[k_idx], linewidth=1.5)
+    
+    ax.set_xlim([-180, 180])
+    ax.set_xticks([-180, -90, 0, 90, 180])
+    ax.set_xlabel('Orientation (deg)', fontsize=8)
+    ax.set_ylabel('Firing Rate (Hz)', fontsize=8)
+    ax.set_title(f'Neuron {neuron_idx}', fontsize=9)
+    ax.tick_params(labelsize=7)
+    ax.grid(True, alpha=0.3)
+    
+    # Only show legend on first subplot
+    if neuron_idx == 0:
+        ax.legend(fontsize=7)
+
+plt.suptitle('Orientation Tuning Curves for All 64 Neurons', fontsize=16, y=0.995)
+plt.tight_layout()
+plt.show()
+
