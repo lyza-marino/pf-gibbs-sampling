@@ -6,7 +6,7 @@ The assignment is to model V1 neurons under the assumption that they perform inf
 
 <img width="378" height="54" alt="sampling_equation" src="https://github.com/user-attachments/assets/33399b0d-4437-481e-83e0-8b34cf694335" />
 
-CI = is a diagonal matrix with diagonal elements being 0.1 (the variance of the independent pixel noise).  
+CI is a diagonal matrix with diagonal elements being 0.1 (the variance of the independent pixel noise).  
 The Bernoulli prior over the latents (the prior probability of any one latent being 1): p(ri = 1) = 0.04  
 Τhe 64 projective fields used were provided beforehand, but more could be generated using a 2D Gabor function.
 
